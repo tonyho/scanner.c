@@ -1,5 +1,6 @@
 CC=gcc
 CFLAGS=-O -Wall -g -lpthread -lcrypto -lssl 
+VERSION=`./scanner  2>&1  | head -n 1 | cut -d"-" -f2`
 
 all: scanner
 
@@ -14,3 +15,9 @@ clean:
 
 distclean: clean
 
+deb:
+	$(CC) -o scanner src/scanner.c $(CFLAGS)
+	sed -i "s/Version:.*/Version: $(VERSION)/g" pkg/DEBIAN/control
+	cp -vax scanner pkg/usr/bin
+	dpkg-deb --build pkg
+	mv pkg.deb scanoss-scanner-$(VERSION)_amd64.deb

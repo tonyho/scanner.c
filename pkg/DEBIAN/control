@@ -1,0 +1,9 @@
+Package: scanoss-scanner
+Version: 1.00
+Section: custom
+Priority: optional
+Architecture: all
+Essential: no
+Installed-Size: 61856
+Maintainer: scanoss.com
+Description: Simple console-based OSS scanner using the free OSSKB (Open Source KB)
