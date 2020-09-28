@@ -34,7 +34,7 @@
 #include "blacklist_ext.h"
 #include "external/winnowing.c"
 
-#define VERSION "1.00"
+#define VERSION "1.01"
 #define API_HOST "osskb.org"
 #define API_PORT "443"
 #define MAX_HEADER_LEN 1024
@@ -142,6 +142,7 @@ bool api_post(BIO *bio, char *wfp) {
 	char header_template[] = "POST /api/scan/direct HTTP/1.1\r\n"
 			"Host: osskb.org\r\n"
 			"Connection: close\r\n"
+			"User-Agent: SCANOSS_scanner.c/%s\r\n"
 			"Content-Length: %lu\r\n"
 			"Accept: */*\r\n"
 			"Content-Type: multipart/form-data; boundary=------------------------scanoss_wfp_scan\r\n\r\n";
@@ -153,7 +154,7 @@ bool api_post(BIO *bio, char *wfp) {
 		"--------------------------scanoss_wfp_scan--\r\n\r\n";
 
 	/* Assemble request header */
-	sprintf(http_request, header_template, strlen(body_template) + strlen (wfp) - 2);
+	sprintf(http_request, header_template, VERSION, strlen(body_template) + strlen (wfp) - 2);
 
 	/* Assemble request body */
 	sprintf(http_request + strlen(http_request), body_template, wfp);

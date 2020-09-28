@@ -2,7 +2,7 @@ CC=gcc
 CFLAGS=-O -Wall -g -lpthread -lcrypto -lssl 
 VERSION=`./scanner  2>&1  | head -n 1 | cut -d"-" -f2`
 
-all: scanner
+all: clean scanner deb
 
 scanner: src/external/crc32c.c src/external/winnowing.c src/scanner.c 
 	 $(CC) -o scanner src/scanner.c $(CFLAGS)
@@ -11,7 +11,7 @@ install:
 	cp scanner /usr/bin
 
 clean:
-	rm -f scanner
+	rm -f scanner *deb
 
 distclean: clean
 

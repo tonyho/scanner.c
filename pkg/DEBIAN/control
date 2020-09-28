@@ -1,5 +1,5 @@
 Package: scanoss-scanner
-Version: 1.00
+Version: 1.01
 Depends: libssl1.1
 Section: custom
 Priority: optional
