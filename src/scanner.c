@@ -166,6 +166,7 @@ bool api_post(BIO *bio, char *wfp) {
 	char buf[BUFFER_SIZE];
 	bool header = true;
 	long body_len = 0;
+	long body_counter = 0;
 
 	/* Parse response */
 	for(;;)
@@ -201,7 +202,10 @@ bool api_post(BIO *bio, char *wfp) {
 				return false;
 			}
 		}
-		body[body_len] = 0;
+
+		body_counter += strlen(body);
+		int surplus = body_counter - body_len;
+		if (surplus > 0) body[strlen(body)-surplus-2]=0;
 		printf(body);
 	}
 
