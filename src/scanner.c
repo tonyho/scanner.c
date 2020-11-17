@@ -46,7 +46,7 @@
 char *wfp_buffer;
 
 bool recursive = false;
-char format[9] = "plain";
+char format[10] = "plain";
 
 /* Returns a hexadecimal representation of the first "len" bytes in "bin" */
 char *bin_to_hex(uint8_t *bin, uint32_t len)
