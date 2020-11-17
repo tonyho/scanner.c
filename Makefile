@@ -1,6 +1,6 @@
 CC=gcc
 CFLAGS=-O -Wall -g -lpthread -lcrypto -lssl 
-VERSION=`./scanner  2>&1  | head -n 1 | cut -d"-" -f2`
+VERSION=`./scanner -h 2>&1  | head -n 1 | cut -d"-" -f2`
 
 all: clean scanner deb
 

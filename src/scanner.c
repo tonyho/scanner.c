@@ -25,6 +25,7 @@
 #include <openssl/bio.h>
 #include <openssl/md5.h>
 #include <openssl/ssl.h>
+#include <dirent.h> 
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -34,7 +35,7 @@
 #include "blacklist_ext.h"
 #include "external/winnowing.c"
 
-#define VERSION "1.01"
+#define VERSION "1.02"
 #define API_HOST "osskb.org"
 #define API_PORT "443"
 #define MAX_HEADER_LEN 1024
@@ -43,6 +44,9 @@
 #define MIN_FILE_SIZE 128
 
 char *wfp_buffer;
+
+bool recursive = false;
+char format[10] = "plain";
 
 /* Returns a hexadecimal representation of the first "len" bytes in "bin" */
 char *bin_to_hex(uint8_t *bin, uint32_t len)
@@ -61,12 +65,21 @@ char *bin_to_hex(uint8_t *bin, uint32_t len)
 	return out;
 }
 
+bool is_dir(char *path)
+{
+    struct stat pstat;
+    if (!stat(path, &pstat)) if (S_ISDIR(pstat.st_mode)) return true;
+    return false;
+}
+
 bool is_file(char *path)
 {
     struct stat pstat;
     if (!stat(path, &pstat)) if (S_ISREG(pstat.st_mode)) return true;
     return false;
 }
+
+
 
 char *read_file(char *path, long *length)
 {
@@ -135,7 +148,7 @@ void wfp_capture(char *path)
 	free(src);
 }
 
-bool api_post(BIO *bio, char *wfp) {
+bool api_post(BIO *bio,char *format,  char *wfp) {
 
 	char *http_request=calloc(MAX_FILE_SIZE, 1);
 
@@ -148,16 +161,18 @@ bool api_post(BIO *bio, char *wfp) {
 			"Content-Type: multipart/form-data; boundary=------------------------scanoss_wfp_scan\r\n\r\n";
 
 	char body_template[] = "--------------------------scanoss_wfp_scan\r\n"
+        "Content-Disposition: form-data; name=\"format\"\r\n\r\n%s\r\n"
+              "--------------------------scanoss_wfp_scan--\r\n"
 		"Content-Disposition: form-data; name=\"file\"; filename=\"scan.wfp\"\r\n"
 		"Content-Type: application/octet-stream\r\n"
 		"\r\n%s\r\n"
 		"--------------------------scanoss_wfp_scan--\r\n\r\n";
 
 	/* Assemble request header */
-	sprintf(http_request, header_template, VERSION, strlen(body_template) + strlen (wfp) - 2);
+	sprintf(http_request, header_template, VERSION, strlen(body_template) + strlen (format) + strlen (wfp) - 4);
 
 	/* Assemble request body */
-	sprintf(http_request + strlen(http_request), body_template, wfp);
+	sprintf(http_request + strlen(http_request), body_template,format, wfp);
 
 	/* POST request */
 	BIO_write(bio, http_request, strlen(http_request));
@@ -213,50 +228,118 @@ bool api_post(BIO *bio, char *wfp) {
 	return true;
 }
 
+/* Scan a file */
+bool file_proc(char * path)
+{
+	wfp_buffer = calloc(MAX_FILE_SIZE, 1);
+	*wfp_buffer = 0;
+	wfp_capture(path);
+
+	if (*wfp_buffer)
+	{
+	    BIO* bio;
+		SSL_CTX* ctx;
+
+		/* Establish SSL connection */
+		SSL_library_init();
+		ctx = SSL_CTX_new(SSLv23_client_method());
+		if (ctx == NULL) return false;
+    	bio = BIO_new_ssl_connect(ctx);
+		BIO_set_conn_hostname(bio, API_HOST ":" API_PORT);
+
+		if(BIO_do_connect(bio) <= 0) return false;
+		api_post(bio,format, wfp_buffer);
+
+		/* Free SSL connection */
+		BIO_free_all(bio);
+		SSL_CTX_free(ctx);
+	}
+	free(wfp_buffer);
+    return true;
+}
+
+/* Scan all files from a Directory*/
+bool dir_proc(char * path)
+{
+  DIR * d = opendir(path); 
+  if(d==NULL) return false; 
+  struct dirent * entry; // for the directory entries
+  
+  while ((entry = readdir(d)) != NULL)
+  {
+        char temp[strlen(path) + strlen(entry->d_name)+1];
+        
+        sprintf(temp,"%s/%s",path,entry->d_name);
+  
+        if(is_dir(temp) && (recursive) && //recurvise mode
+        !((strlen(entry->d_name) == 1 && entry->d_name[0] == '.') || (strlen(entry->d_name) == 2 && entry->d_name[1] == '.'))) //avoid roots
+        {
+            dir_proc(temp); 
+        }
+        else if (is_file(temp))
+        {
+            fprintf(stderr, "\n%s ",temp);
+            file_proc(temp);
+        }
+    }
+    
+    closedir(d); 
+    return true;
+}
+
+
 int main(int argc, char *argv[])
 {
-	if (argc != 2)
-	{
-		fprintf(stderr, "SCANOSS scanner-%s\n", VERSION);
-		fprintf(stderr, "Usage: scanner FILE\n");
-		fprintf(stderr, "For more information, please visit https://scanoss.com\n");
-		exit(EXIT_FAILURE);
-	}
-
-	else
-	{
-		char *path = argv[optind];
-		if (is_file(path))
-		{
-			wfp_buffer = calloc(MAX_FILE_SIZE, 1);
-			*wfp_buffer = 0;
-			wfp_capture(path);
-			if (*wfp_buffer)
-			{
-				BIO* bio;
-				SSL_CTX* ctx;
-
-				/* Establish SSL connection */
-				SSL_library_init();
-				ctx = SSL_CTX_new(SSLv23_client_method());
-				if (ctx == NULL) return false;
-				bio = BIO_new_ssl_connect(ctx);
-				BIO_set_conn_hostname(bio, API_HOST ":" API_PORT);
-				if(BIO_do_connect(bio) <= 0) return false;
-
-				api_post(bio, wfp_buffer);
-
-				/* Free SSL connection */
-				BIO_free_all(bio);
-				SSL_CTX_free(ctx);
-			}
-			free(wfp_buffer);
-		}
-		else
-		{
-			fprintf(stderr,"%s is not a file\n", path);
-			return EXIT_FAILURE;
-		}
-	}
+    int param = 0;
+    
+    /* Command parser */
+    while ((param = getopt (argc, argv, "hrf:")) != -1)
+        switch (param)
+        {
+        case 'r':
+            recursive = true; //recursive mode
+            break;
+        case 'f':
+            if (strstr(optarg,"plain") || strstr(optarg,"spdx") || strstr(optarg,"cyclonedx"))
+                strncpy(format,optarg,sizeof(format));
+            else
+                fprintf(stderr, "%s is not a valid output format, using plain\n",optarg);
+            break;
+        case 'h':
+        default:
+            fprintf(stderr, "SCANOSS scanner-%s\n", VERSION);
+            fprintf(stderr, "Usage: scanner FILE or scanner DIR\n");
+            fprintf(stderr, "Option\t\t Meaning\n");
+            fprintf(stderr, "-h\t\t Show this help\n");
+            fprintf(stderr, "-f<format>\t Output format, could be: plain (default), spdx or cyclonedx.\n");
+            fprintf(stderr, "-r\t\t Recursive mode, use with DIR\n");
+            fprintf(stderr, "\nFor more information, please visit https://scanoss.com\n");
+            exit(EXIT_FAILURE);
+           break;
+        }
+    
+       
+    char *path = argv[optind];
+    
+    if (is_file(path))
+    {
+        file_proc(path);
+    }
+    else if (is_dir(path)) 
+    {
+        if (!recursive)
+        {
+            fprintf(stderr,"%s is a directory, scan all files? y/n\n",path);
+            if (getchar()!='y') return EXIT_SUCCESS;
+        }
+        
+        dir_proc(path);
+    }
+    else
+    {
+        fprintf(stderr,"%s is not a file\n", path);
+        return EXIT_FAILURE;
+    }
+	
 	return EXIT_SUCCESS;
 }
