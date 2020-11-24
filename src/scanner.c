@@ -35,17 +35,18 @@
 #include "blacklist_ext.h"
 #include "external/winnowing.c"
 
-#define VERSION "1.02"
+#define VERSION "1.03"
 #define API_HOST "osskb.org"
 #define API_PORT "443"
 #define MAX_HEADER_LEN 1024
-#define BUFFER_SIZE 1024
+#define BUFFER_SIZE_MAX 5120
+#define BUFFER_SIZE_MIN 256
+#define BUFFER_SIZE_DEFAULT 2048
 #define MAX_FILE_SIZE (1024 * 1024 * 4)
 #define MIN_FILE_SIZE 128
 
 char *wfp_buffer;
-
-bool recursive = false;
+int buffer_size = BUFFER_SIZE_DEFAULT;
 char format[10] = "plain";
 
 /* Returns a hexadecimal representation of the first "len" bytes in "bin" */
@@ -178,53 +179,57 @@ bool api_post(BIO *bio,char *format,  char *wfp) {
 	BIO_write(bio, http_request, strlen(http_request));
 
 	int size;
-	char buf[BUFFER_SIZE];
+	//char buf[BUFFER_SIZE];
+    char * buf;
 	bool header = true;
-	long body_len = 0;
-	long body_counter = 0;
-
-	/* Parse response */
-	for(;;)
-	{
-		size = BIO_read(bio, buf, BUFFER_SIZE - 1);
-		if(size <= 0) break;
-		buf[size] = 0;
-		char *body = buf;
-
-		/* Parse response header */
-		if (header)
-		{
-			/* Search for end of header (\r\n\r\n) */
-			for (int i = 0; i < (size - 4); i++)
-			{
-				if (!memcmp(body+i,"\r\n\r\n", 4))
-				{
-					body = body + i + 4;
-					break;
-				}
-			}
-			/* Get body length */
-			if (body != buf)
-			{
-				body_len = strtol(body, &body, 16);
-				if (body_len) body += 2;	
-				header = false;
-			}
-			if (header)
-			{
-				fprintf(stderr, "Error parsing http header:\n%s\n", buf); 
-				free(http_request);
-				return false;
-			}
-		}
-
-		body_counter += strlen(body);
-		int surplus = body_counter - body_len;
-		if (surplus > 0) body[strlen(body)-surplus-2]=0;
-		printf(body);
-	}
+	int body_len = 0;
+    char * body_start;
+    char * body_end;
+    int block_read = 0;
+    buf = malloc(sizeof(char)*buffer_size+1);
+    /* Parse response */
+    do
+    {
+        memset(buf,'\0',buffer_size);
+        size = BIO_read(bio, buf, buffer_size);
+        if (size)
+        {
+            if (header && strstr(buf,"HTTP")) //find the header
+            {
+                body_start = strchr(buf,'{'); //find the JSON start
+                body_len = strtol(body_start-5, &body_start, 16); //cast body lenght
+          //      printf("\nbody len: %d\n",body_len);
+                header = false;
+                body_end = strrchr(buf,'}');// find the last }
+                if (body_end-body_start >= body_len-2) //Its complete
+                {
+                   block_read += printf("%.*s\n", body_len, body_start);
+                }
+                else
+                {
+                    //block_read += printf(body_start);
+                    block_read += printf("%.*s", (int) strlen(body_start)-8, body_start); // 8 its some garbage from the reponse
+                }
+            }
+            else if (block_read + size <= body_len-1) //the middle of the JASON
+            {
+               
+                block_read += printf("%.*s", size, buf);
+            }
+            else //Find the end.
+            {
+                body_end = strrchr(buf,'}'); 
+                if (body_end)
+                    block_read += printf("%.*s\n", (int) (body_end - buf+1), buf);
+                  //  block_read += printf("%.*s\n", body_len - block_read-1, buf);
+            }
+        }
+        
+        //printf("\nblock read: %d\n",block_read);
+    } while (size > 0 && block_read <= body_len-2);
 
 	free(http_request);
+    free(buf);
 	return true;
 }
 
@@ -271,14 +276,14 @@ bool dir_proc(char * path)
         
         sprintf(temp,"%s/%s",path,entry->d_name);
   
-        if(is_dir(temp) && (recursive) && //recurvise mode
+        if(is_dir(temp) &&
         !((strlen(entry->d_name) == 1 && entry->d_name[0] == '.') || (strlen(entry->d_name) == 2 && entry->d_name[1] == '.'))) //avoid roots
         {
             dir_proc(temp); 
         }
         else if (is_file(temp))
         {
-            fprintf(stderr, "\n%s ",temp);
+            //fprintf(stderr, "\n%s ",temp);
             file_proc(temp);
         }
     }
@@ -293,11 +298,17 @@ int main(int argc, char *argv[])
     int param = 0;
     
     /* Command parser */
-    while ((param = getopt (argc, argv, "hrf:")) != -1)
+    while ((param = getopt (argc, argv, "f:b:h")) != -1)
         switch (param)
         {
-        case 'r':
-            recursive = true; //recursive mode
+        case 'b': //set http response buffe size
+            buffer_size = atoi(optarg);
+            if (buffer_size > BUFFER_SIZE_MAX || buffer_size < BUFFER_SIZE_MIN )
+            {
+                buffer_size = BUFFER_SIZE_DEFAULT;
+                fprintf(stderr,"Wrong buffer size, using default: %d",buffer_size);
+            }
+            
             break;
         case 'f':
             if (strstr(optarg,"plain") || strstr(optarg,"spdx") || strstr(optarg,"cyclonedx"))
@@ -312,7 +323,7 @@ int main(int argc, char *argv[])
             fprintf(stderr, "Option\t\t Meaning\n");
             fprintf(stderr, "-h\t\t Show this help\n");
             fprintf(stderr, "-f<format>\t Output format, could be: plain (default), spdx or cyclonedx.\n");
-            fprintf(stderr, "-r\t\t Recursive mode, use with DIR\n");
+            fprintf(stderr, "-b<bytes>\t\t HTTP response buffer size, default: 2048\n");
             fprintf(stderr, "\nFor more information, please visit https://scanoss.com\n");
             exit(EXIT_FAILURE);
            break;
@@ -327,11 +338,9 @@ int main(int argc, char *argv[])
     }
     else if (is_dir(path)) 
     {
-        if (!recursive)
-        {
-            fprintf(stderr,"%s is a directory, scan all files? y/n\n",path);
-            if (getchar()!='y') return EXIT_SUCCESS;
-        }
+        int path_len = strlen(path);
+        if (path_len > 1 && path[path_len-1] == '/') //remove extra /
+            path[path_len-1] = '\0';
         
         dir_proc(path);
     }
