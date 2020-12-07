@@ -35,7 +35,7 @@
 #include "blacklist_ext.h"
 #include "external/winnowing.c"
 
-#define VERSION "1.03"
+#define VERSION "1.04"
 #define API_HOST "osskb.org"
 #define API_PORT "443"
 #define MAX_HEADER_LEN 1024
@@ -45,9 +45,12 @@
 #define MAX_FILE_SIZE (1024 * 1024 * 4)
 #define MIN_FILE_SIZE 128
 
+//#define DEBUG /* uncomment this define to enable some debug outputs */
+
 char *wfp_buffer;
 int buffer_size = BUFFER_SIZE_DEFAULT;
 char format[10] = "plain";
+bool verbose = false;
 
 /* Returns a hexadecimal representation of the first "len" bytes in "bin" */
 char *bin_to_hex(uint8_t *bin, uint32_t len)
@@ -168,7 +171,7 @@ bool api_post(BIO *bio,char *format,  char *wfp) {
 		"Content-Type: application/octet-stream\r\n"
 		"\r\n%s\r\n"
 		"--------------------------scanoss_wfp_scan--\r\n\r\n";
-
+    
 	/* Assemble request header */
 	sprintf(http_request, header_template, VERSION, strlen(body_template) + strlen (format) + strlen (wfp) - 4);
 
@@ -177,6 +180,10 @@ bool api_post(BIO *bio,char *format,  char *wfp) {
 
 	/* POST request */
 	BIO_write(bio, http_request, strlen(http_request));
+    
+    /*This symbols are used to parse the api response in buf, at this moment it could be a JSON or XML format */
+    char symbol_start = '{'; 
+    char symbol_stop = '}';
 
 	int size;
 	//char buf[BUFFER_SIZE];
@@ -187,20 +194,33 @@ bool api_post(BIO *bio,char *format,  char *wfp) {
     char * body_end;
     int block_read = 0;
     buf = malloc(sizeof(char)*buffer_size+1);
+    
+    if (verbose)  fprintf(stderr, "Api post - buffer size: %d\n",buffer_size);
     /* Parse response */
     do
     {
         memset(buf,'\0',buffer_size);
         size = BIO_read(bio, buf, buffer_size);
+#ifdef DEBUG
+        printf("\n---- api post buffer start ----\n");
+        printf(buf);
+        printf("\n---- api post buffer end ----\n");
+#endif
+        if (strstr(format,"xml")) //adjust parsing for xml implementation
+        {
+            symbol_start = '<';
+            symbol_stop = '>';
+        }
+        
         if (size)
         {
             if (header && strstr(buf,"HTTP")) //find the header
             {
-                body_start = strchr(buf,'{'); //find the JSON start
+                body_start = strchr(buf,symbol_start); //find the JSON start
                 body_len = strtol(body_start-5, &body_start, 16); //cast body lenght
           //      printf("\nbody len: %d\n",body_len);
                 header = false;
-                body_end = strrchr(buf,'}');// find the last }
+                body_end = strrchr(buf,symbol_stop);// find the last }
                 if (body_end-body_start >= body_len-2) //Its complete
                 {
                    block_read += printf("%.*s\n", body_len, body_start);
@@ -218,7 +238,7 @@ bool api_post(BIO *bio,char *format,  char *wfp) {
             }
             else //Find the end.
             {
-                body_end = strrchr(buf,'}'); 
+                body_end = strrchr(buf,symbol_stop); 
                 if (body_end)
                     block_read += printf("%.*s\n", (int) (body_end - buf+1), buf);
                   //  block_read += printf("%.*s\n", body_len - block_read-1, buf);
@@ -298,7 +318,7 @@ int main(int argc, char *argv[])
     int param = 0;
     
     /* Command parser */
-    while ((param = getopt (argc, argv, "f:b:h")) != -1)
+    while ((param = getopt (argc, argv, "f:b:hv")) != -1)
         switch (param)
         {
         case 'b': //set http response buffe size
@@ -310,11 +330,17 @@ int main(int argc, char *argv[])
             }
             
             break;
+        case 'v':
+            verbose = true;
+             fprintf(stderr, "verbose mode\n");
+            break;
         case 'f':
             if (strstr(optarg,"plain") || strstr(optarg,"spdx") || strstr(optarg,"cyclonedx"))
                 strncpy(format,optarg,sizeof(format));
             else
                 fprintf(stderr, "%s is not a valid output format, using plain\n",optarg);
+                
+            if (verbose) fprintf(stderr, "Selected format: %s\n",format);
             break;
         case 'h':
         default:
@@ -322,8 +348,9 @@ int main(int argc, char *argv[])
             fprintf(stderr, "Usage: scanner FILE or scanner DIR\n");
             fprintf(stderr, "Option\t\t Meaning\n");
             fprintf(stderr, "-h\t\t Show this help\n");
-            fprintf(stderr, "-f<format>\t Output format, could be: plain (default), spdx or cyclonedx.\n");
-            fprintf(stderr, "-b<bytes>\t\t HTTP response buffer size, default: 2048\n");
+            fprintf(stderr, "-f<format>\t Output format, could be: plain (default), spdx, spdx_xml or cyclonedx.\n");
+            fprintf(stderr, "-b<bytes>\t HTTP response buffer size, default: 2048\n");
+            fprintf(stderr, "-v\t\t Enable verbosity (via STDERR)\n");
             fprintf(stderr, "\nFor more information, please visit https://scanoss.com\n");
             exit(EXIT_FAILURE);
            break;
