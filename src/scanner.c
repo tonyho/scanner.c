@@ -350,7 +350,7 @@ int main(int argc, char *argv[])
             fprintf(stderr, "-h\t\t Show this help\n");
             fprintf(stderr, "-f<format>\t Output format, could be: plain (default), spdx, spdx_xml or cyclonedx.\n");
             fprintf(stderr, "-b<bytes>\t HTTP response buffer size, default: 2048\n");
-            fprintf(stderr, "-v\t\t Verbose mode - It could help in case of unexpected behaviors\n");
+            fprintf(stderr, "-v\t\t Enable verbosity (via STDERR)\n");
             fprintf(stderr, "\nFor more information, please visit https://scanoss.com\n");
             exit(EXIT_FAILURE);
            break;
