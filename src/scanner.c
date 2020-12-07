@@ -35,20 +35,20 @@
 #include "blacklist_ext.h"
 #include "external/winnowing.c"
 
-#define VERSION "1.04"
+#define VERSION "1.1.0"
 #define API_HOST "osskb.org"
 #define API_PORT "443"
-#define MAX_HEADER_LEN 1024
-#define BUFFER_SIZE_MAX 5120
+#define MAX_HEADER_LEN 1048576
+#define BUFFER_SIZE_MAX 524288
 #define BUFFER_SIZE_MIN 256
-#define BUFFER_SIZE_DEFAULT 2048
+#define BUFFER_SIZE_DEFAULT 524288
 #define MAX_FILE_SIZE (1024 * 1024 * 4)
 #define MIN_FILE_SIZE 128
 
 //#define DEBUG /* uncomment this define to enable some debug outputs */
 
 char *wfp_buffer;
-int buffer_size = BUFFER_SIZE_DEFAULT;
+unsigned int buffer_size = BUFFER_SIZE_DEFAULT;
 char format[10] = "plain";
 bool verbose = false;
 
@@ -349,7 +349,7 @@ int main(int argc, char *argv[])
             fprintf(stderr, "Option\t\t Meaning\n");
             fprintf(stderr, "-h\t\t Show this help\n");
             fprintf(stderr, "-f<format>\t Output format, could be: plain (default), spdx, spdx_xml or cyclonedx.\n");
-            fprintf(stderr, "-b<bytes>\t HTTP response buffer size, default: 2048\n");
+            fprintf(stderr, "-b<bytes>\t HTTP response buffer size, default: %d bytes\n",BUFFER_SIZE_DEFAULT);
             fprintf(stderr, "-v\t\t Enable verbosity (via STDERR)\n");
             fprintf(stderr, "\nFor more information, please visit https://scanoss.com\n");
             exit(EXIT_FAILURE);
