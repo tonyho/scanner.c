@@ -7,6 +7,9 @@ all: clean scanner deb
 scanner: src/external/crc32c.c src/external/winnowing.c src/scanner.c 
 	 $(CC) -o scanner src/scanner.c $(CFLAGS)
 
+arm: src/external/crc32c.c src/external/winnowing.c src/scanner.c 
+	 $(CC) -DCRC32_SOFTWARE_MODE -o scanner src/scanner.c $(CFLAGS) 
+
 install:
 	cp scanner /usr/bin
 
