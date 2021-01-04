@@ -35,17 +35,26 @@
 #include "scanner.h"
 #include "blacklist_ext.h"
 #include "winnowing.h"
-
-
+#include "api_post.h"
+#include "log.h"
 //#define DEBUG /* uncomment this define to enable some debug outputs */
 
-char *wfp_buffer;
-unsigned int buffer_size = BUFFER_SIZE_DEFAULT;
-char format[10] = "plain";
-bool verbose = false;
+/*SCANNER PRIVATE PROPERTIES*/
+#define API_HOST_DEFAULT "osskb.org"
+#define API_PORT_DEFAULT "443"
+#define API_SESSION_DEFAULT "\0"
+
+static char API_host[32] = API_HOST_DEFAULT;
+static char API_port[5] = API_PORT_DEFAULT;
+static char API_session[33] = API_SESSION_DEFAULT;
+
+static unsigned int buffer_size = BUFFER_SIZE_DEFAULT;
+static char format[10] = "plain";
+static bool verbose = false;
+static unsigned int proc_files = 0;
 
 /* Returns a hexadecimal representation of the first "len" bytes in "bin" */
-char *bin_to_hex(uint8_t *bin, uint32_t len)
+static char *bin_to_hex(uint8_t *bin, uint32_t len)
 {
 	char digits[] = "0123456789abcdef";
 	char *out = malloc(2 * len + 1);
@@ -61,23 +70,7 @@ char *bin_to_hex(uint8_t *bin, uint32_t len)
 	return out;
 }
 
-bool is_dir(char *path)
-{
-    struct stat pstat;
-    if (!stat(path, &pstat)) if (S_ISDIR(pstat.st_mode)) return true;
-    return false;
-}
-
-bool is_file(char *path)
-{
-    struct stat pstat;
-    if (!stat(path, &pstat)) if (S_ISREG(pstat.st_mode)) return true;
-    return false;
-}
-
-
-
-char *read_file(char *path, long *length)
+static char *read_file(char *path, long *length)
 {
 	/* Read file into memory */
 	FILE *fp = fopen(path, "rb");
@@ -90,7 +83,7 @@ char *read_file(char *path, long *length)
 	return src;
 }
 
-void wfp_capture(char *path)
+static void wfp_capture(char *path, char *wfp_buffer)
 {
 	/* Skip unwanted extensions */
 	if (blacklisted(path)) return;
@@ -144,12 +137,13 @@ void wfp_capture(char *path)
 	free(src);
 }
 
-bool api_post(BIO *bio,char *format,  char *wfp) {
+static bool api_post(BIO *bio,char * host, char * session, char *format,  char *wfp, FILE * output) {
 
 	char *http_request=calloc(MAX_FILE_SIZE, 1);
 
 	char header_template[] = "POST /api/scan/direct HTTP/1.1\r\n"
-			"Host: osskb.org\r\n"
+			"Host: %s\r\n"
+            "X-session: %s\r\n"
 			"Connection: close\r\n"
 			"User-Agent: SCANOSS_scanner.c/%s\r\n"
 			"Content-Length: %lu\r\n"
@@ -165,8 +159,8 @@ bool api_post(BIO *bio,char *format,  char *wfp) {
 		"--------------------------scanoss_wfp_scan--\r\n\r\n";
     
 	/* Assemble request header */
-	sprintf(http_request, header_template, VERSION, strlen(body_template) + strlen (format) + strlen (wfp) - 4);
-
+	sprintf(http_request, header_template, host,session, VERSION, strlen(body_template) + strlen (format) + strlen (wfp) - 4);
+    log_debug(http_request);
 	/* Assemble request body */
 	sprintf(http_request + strlen(http_request), body_template,format, wfp);
 
@@ -193,11 +187,11 @@ bool api_post(BIO *bio,char *format,  char *wfp) {
     {
         memset(buf,'\0',buffer_size);
         size = BIO_read(bio, buf, buffer_size);
-#ifdef DEBUG
-        printf("\n---- api post buffer start ----\n");
-        printf(buf);
-        printf("\n---- api post buffer end ----\n");
-#endif
+
+        log_debug("\n---- api post buffer start ----\n");
+        log_debug(buf);
+        log_debug("\n---- api post buffer end ----\n");
+
         if (strstr(format,"xml")) //adjust parsing for xml implementation
         {
             symbol_start = '<';
@@ -215,24 +209,24 @@ bool api_post(BIO *bio,char *format,  char *wfp) {
                 body_end = strrchr(buf,symbol_stop);// find the last }
                 if (body_end-body_start >= body_len-2) //Its complete
                 {
-                   block_read += printf("%.*s\n", body_len, body_start);
+                   block_read += fprintf(output,"%.*s\n", body_len, body_start);
                 }
                 else
                 {
                     //block_read += printf(body_start);
-                    block_read += printf("%.*s", (int) strlen(body_start)-8, body_start); // 8 its some garbage from the reponse
+                    block_read += fprintf(output,"%.*s", (int) strlen(body_start)-8, body_start); // 8 its some garbage from the reponse
                 }
             }
             else if (block_read + size <= body_len-1) //the middle of the JASON
             {
                
-                block_read += printf("%.*s", size, buf);
+                block_read += fprintf(output,"%.*s", size, buf);
             }
             else //Find the end.
             {
                 body_end = strrchr(buf,symbol_stop); 
                 if (body_end)
-                    block_read += printf("%.*s\n", (int) (body_end - buf+1), buf);
+                    block_read += fprintf(output,"%.*s\n", (int) (body_end - buf+1), buf);
                   //  block_read += printf("%.*s\n", body_len - block_read-1, buf);
             }
         }
@@ -242,42 +236,131 @@ bool api_post(BIO *bio,char *format,  char *wfp) {
 
 	free(http_request);
     free(buf);
-	return true;
+	return false;
 }
 
-/* Scan a file */
-bool file_proc(char * path)
+/********* PUBLIC FUNTIONS DEFINITION ************/
+
+void scanner_set_verbose(bool in)
 {
-	wfp_buffer = calloc(MAX_FILE_SIZE, 1);
-	*wfp_buffer = 0;
-	wfp_capture(path);
+    verbose = in;
+}
+
+void scanner_set_buffer_size(unsigned int size)
+{
+    if (size > BUFFER_SIZE_MAX || size < BUFFER_SIZE_MIN )
+    {
+        buffer_size = BUFFER_SIZE_DEFAULT;
+        fprintf(stderr,"Wrong buffer size, using default: %d",buffer_size);
+    }
+}
+
+void scanner_set_format(char * form)
+{
+    if (strstr(form,"plain") || strstr(form,"spdx") || strstr(form,"cyclonedx"))
+        strncpy(format,form,sizeof(format));
+    else
+        fprintf(stderr, "%s is not a valid output format, using plain\n",form);
+    
+    if (verbose) fprintf(stderr, "Selected format: %s\n",format);
+}
+
+void scanner_set_host(char * host)
+{
+    memset(API_host,'\0',sizeof(API_host));
+    strncpy(API_host,host,sizeof(API_host));
+    log_debug("Host set: %s",API_host);
+}
+
+void scanner_set_port(char * port)
+{
+    memset(API_port,'\0',sizeof(API_port));
+    strncpy(API_port,port,sizeof(API_port));
+    log_debug("Port set: %s",API_port);
+}
+
+void scanner_set_session(char * session)
+{
+    memset(API_session,'\0',sizeof(API_session));
+    strncpy(API_session,session,sizeof(API_session));
+    log_debug("Session set: %s",API_session);
+}
+
+void scanner_set_log_level(int level)
+{
+    log_set_level(level);
+}
+
+bool scanner_is_dir(char *path)
+{
+    struct stat pstat;
+    if (!stat(path, &pstat)) if (S_ISDIR(pstat.st_mode)) return true;
+    return false;
+}
+
+bool scanner_is_file(char *path)
+{
+    struct stat pstat;
+    if (!stat(path, &pstat)) if (S_ISREG(pstat.st_mode)) return true;
+    return false;
+}
+
+
+//#define CHANGE_TEST
+/* Scan a file */
+bool scanner_file_proc(char * path, FILE * output)
+{
+	bool state = true;
+    char * wfp_buffer = calloc(MAX_FILE_SIZE, 1);
+	
+    *wfp_buffer = 0;
+	
+    wfp_capture(path, wfp_buffer);
 
 	if (*wfp_buffer)
 	{
 	    BIO* bio;
 		SSL_CTX* ctx;
-
-		/* Establish SSL connection */
-		SSL_library_init();
-		ctx = SSL_CTX_new(SSLv23_client_method());
-		if (ctx == NULL) return false;
+        
+        log_debug("BIO_do_connect to: %s:%s", API_host, API_port);
+        
+        /* Establish SSL connection */
+		
+        SSL_library_init();
+		
+        ctx = SSL_CTX_new(SSLv23_client_method());
+		
+        if (ctx == NULL) return false;
     	bio = BIO_new_ssl_connect(ctx);
-		BIO_set_conn_hostname(bio, API_HOST ":" API_PORT);
+		
+        BIO_set_conn_hostname(bio,API_host);
+        BIO_set_conn_port(bio,API_port);
 
-		if(BIO_do_connect(bio) <= 0) return false;
-		api_post(bio,format, wfp_buffer);
-
-		/* Free SSL connection */
+		if (BIO_do_connect(bio) <= 0)
+        {    
+            log_error("Connetion fails: %s:%s", API_host, API_port);
+            return false;
+        }
+        
+		api_post(bio,API_host,API_session, format, wfp_buffer, output);
+        
+        proc_files++;
+		
+        /* Free SSL connection */
 		BIO_free_all(bio);
 		SSL_CTX_free(ctx);
-	}
+        state = false;
+    }
+
 	free(wfp_buffer);
-    return true;
+    return state;
 }
 
 /* Scan all files from a Directory*/
-bool dir_proc(char * path)
+bool scanner_dir_proc(char * path, FILE * output)
 {
+  
+  bool state = true; //true if were a error  
   DIR * d = opendir(path); 
   if(d==NULL) return false; 
   struct dirent * entry; // for the directory entries
@@ -288,18 +371,69 @@ bool dir_proc(char * path)
         
         sprintf(temp,"%s/%s",path,entry->d_name);
   
-        if(is_dir(temp) &&
+        if(scanner_is_dir(temp) &&
         !((strlen(entry->d_name) == 1 && entry->d_name[0] == '.') || (strlen(entry->d_name) == 2 && entry->d_name[1] == '.'))) //avoid roots
         {
-            dir_proc(temp); 
+            scanner_dir_proc(temp, output); 
         }
-        else if (is_file(temp))
+        else if (scanner_is_file(temp))
         {
-            //fprintf(stderr, "\n%s ",temp);
-            file_proc(temp);
+            if (!scanner_file_proc(temp, output))
+            {    
+                fprintf(output,",");
+                if (output != stdout)
+                    log_info("Processed files: %d",proc_files);
+                state = false;
+            }
         }
     }
     
     closedir(d); 
-    return true;
+    return state;
+}
+
+bool scanner_scan(char * host, char * port, char * session, char * format, char * path, char * file)
+{
+    FILE * output;
+    
+    scanner_set_host(host);
+    scanner_set_port(port);
+    scanner_set_session(session);
+    scanner_set_format(format);
+    
+    log_debug("Scan start");
+    
+    if (file != NULL)
+    {
+        output = fopen(file,"w+");
+        log_debug("File open: %s",file);
+    }
+    
+    if (scanner_is_file(path))
+    {
+        scanner_file_proc(path, output);
+    }
+    else if (scanner_is_dir(path)) 
+    {
+        int path_len = strlen(path);
+        if (path_len > 1 && path[path_len-1] == '/') //remove extra '/'
+            path[path_len-1] = '\0';
+        
+        fprintf(output,"[");
+        scanner_dir_proc(path, output);
+        fprintf(output,"]");
+
+    }
+    else
+    {
+        log_error(stderr,"%s is not a file\n", path);
+        return true;
+    }
+    
+    
+    if (output)
+        fclose(output);
+    
+    return false;
+	
 }

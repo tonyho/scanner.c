@@ -1,0 +1,92 @@
+[
+{
+  "src/scanner.c": [
+    {
+      "id": "none",
+      "elapsed": "0.545469s"
+    }
+  ]
+}
+
+,
+{
+  "src/api_post.c": [
+    {
+      "id": "none",
+      "elapsed": "0.384827s"
+    }
+  ]
+}
+
+,
+{
+  "src/api_post.o": [
+    {
+      "id": "none",
+      "elapsed": "0.000006s"
+    }
+  ]
+}
+
+,
+{
+  "src/blacklist_ext.h": [
+    {
+      "id": "file",
+      "lines": "all",
+      "oss_lines": "all",
+      "matched": "100%",
+      "vendor": "scanoss",
+      "component": "minr",
+      "version": "1.18",
+      "latest": "d0dea1d",
+      "url": "https://github.com/scanoss/minr/archive/1.18.tar.gz",
+      "file": "minr-1.18/src/blacklist_ext.h",
+      "component_id": "1f177935dcc4cfd61945635f11f04029",
+      "file_id": "5c88faa41303611463bfcbf1a20e3d85",
+      "dependencies": [],
+      "licenses": [
+        {
+          "name": "GPL-2.0-only",
+          "source": "component_declared"
+        }
+      ],
+      "copyrights": [],
+      "vulnerabilities": [],
+      "quality": [],
+      "elapsed": "0.000436s"
+    }
+  ]
+}
+
+,
+{
+  "src/scanner.o": [
+    {
+      "id": "none",
+      "elapsed": "0.000004s"
+    }
+  ]
+}
+
+,
+{
+  "src/main.c": [
+    {
+      "id": "none",
+      "elapsed": "0.137354s"
+    }
+  ]
+}
+
+,
+{
+  "src/main.o": [
+    {
+      "id": "none",
+      "elapsed": "0.000005s"
+    }
+  ]
+}
+
+]

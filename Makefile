@@ -3,7 +3,7 @@ CC=gcc
 CCFLAGS=-g -Wall -std=gnu99 -I./inc -I./external/inc
 
 # Linker flags
-LDFLAGS=-lpthread -lcrypto -lssl
+LDFLAGS=-lpthread -lcrypto -lssl -lcurl
 LIBFLAGS=-O -g -Wall -std=gnu99 -fPIC -c
 
 VERSION=`./scanner -h 2>&1  | head -n 1 | cut -d"-" -f2`
