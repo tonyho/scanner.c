@@ -1,6 +1,6 @@
 CC=gcc
 # Enable all compiler warnings. 
-CCFLAGS=-g -Wall -std=gnu99 -I./inc -I./external/inc
+CCFLAGS= -fPIC -g -Wall -std=gnu99 -I./inc -I./external/inc
 
 # Linker flags
 LDFLAGS=-lpthread -lcrypto -lssl -lcurl
@@ -22,9 +22,6 @@ LIB_NAME=libscanner.so
 BIN_NAME=scanner
 
 
-
-
-$(TARGET_LIB): CCFLAGS += -fPIC
 $(TARGET_NOINTEL): CCFLAGS += -DCRC32_SOFTWARE_MODE
 
 
@@ -49,6 +46,7 @@ install:$(BIN_NAME)
 	cp $(BIN_NAME) /usr/bin
 install_lib:$(LIB_NAME)
 	cp $(LIB_NAME) /usr/lib
+	mkdir -p /usr/include/scanner && cp inc/scanner.h /usr/include/scanner
 clean_build:
 	rm -f src/*.o src/**/*.o external/src/*.o external/src/**/*.o    
 
