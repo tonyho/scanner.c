@@ -26,34 +26,34 @@
 #include <openssl/md5.h>
 #include <openssl/ssl.h>
 #include <dirent.h> 
-#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
 
+
+#include "scanner.h"
 #include "blacklist_ext.h"
-#include "external/winnowing.c"
-
-#define VERSION "1.04"
-#define API_HOST "osskb.org"
-#define API_PORT "443"
-#define MAX_HEADER_LEN 1024
-#define BUFFER_SIZE_MAX 5120
-#define BUFFER_SIZE_MIN 256
-#define BUFFER_SIZE_DEFAULT 2048
-#define MAX_FILE_SIZE (1024 * 1024 * 4)
-#define MIN_FILE_SIZE 128
-
+#include "winnowing.h"
+#include "api_post.h"
+#include "log.h"
 //#define DEBUG /* uncomment this define to enable some debug outputs */
 
-char *wfp_buffer;
-int buffer_size = BUFFER_SIZE_DEFAULT;
-char format[10] = "plain";
-bool verbose = false;
+/*SCANNER PRIVATE PROPERTIES*/
+#define API_HOST_DEFAULT "osskb.org"
+#define API_PORT_DEFAULT "443"
+#define API_SESSION_DEFAULT "\0"
+
+static char API_host[32] = API_HOST_DEFAULT;
+static char API_port[5] = API_PORT_DEFAULT;
+static char API_session[33] = API_SESSION_DEFAULT;
+
+static unsigned int buffer_size = BUFFER_SIZE_DEFAULT;
+static char format[10] = "plain";
+static unsigned int proc_files = 0;
 
 /* Returns a hexadecimal representation of the first "len" bytes in "bin" */
-char *bin_to_hex(uint8_t *bin, uint32_t len)
+static char *bin_to_hex(uint8_t *bin, uint32_t len)
 {
 	char digits[] = "0123456789abcdef";
 	char *out = malloc(2 * len + 1);
@@ -69,23 +69,7 @@ char *bin_to_hex(uint8_t *bin, uint32_t len)
 	return out;
 }
 
-bool is_dir(char *path)
-{
-    struct stat pstat;
-    if (!stat(path, &pstat)) if (S_ISDIR(pstat.st_mode)) return true;
-    return false;
-}
-
-bool is_file(char *path)
-{
-    struct stat pstat;
-    if (!stat(path, &pstat)) if (S_ISREG(pstat.st_mode)) return true;
-    return false;
-}
-
-
-
-char *read_file(char *path, long *length)
+static char *read_file(char *path, long *length)
 {
 	/* Read file into memory */
 	FILE *fp = fopen(path, "rb");
@@ -98,7 +82,53 @@ char *read_file(char *path, long *length)
 	return src;
 }
 
-void wfp_capture(char *path)
+static void report_open(FILE * output)
+{
+    if (strstr(format,"plain"))
+    {
+        fprintf(output,"{");
+    }
+    else if (strstr(format,"xml"))
+    {
+        fprintf(output,"<root>");
+    } 
+    else if (strstr(format,"spdx"))
+    {
+        fprintf(output,"[");
+    }
+}
+
+static void report_close(FILE * output)
+{
+    if (output == stdout)
+        fprintf(output,"\b");
+    else
+        fseek(output,-1L,SEEK_CUR);
+        
+    if (strstr(format,"plain"))
+    {
+        fprintf(output,"}");
+    }
+     else if (strstr(format,"xml"))
+    {
+        fprintf(output,"\n</root>");
+    } 
+    else if (strstr(format,"spdx"))
+    {
+        fprintf(output,"]");
+    }
+}
+
+static void report_separator(FILE * output)
+{
+    if (!strstr(format,"xml"))
+    {
+        fprintf(output,",");
+    }
+}
+        
+
+static void wfp_capture(char *path, char *wfp_buffer)
 {
 	/* Skip unwanted extensions */
 	if (blacklisted(path)) return;
@@ -152,12 +182,13 @@ void wfp_capture(char *path)
 	free(src);
 }
 
-bool api_post(BIO *bio,char *format,  char *wfp) {
+static bool api_post(BIO *bio,char * host, char * session, char *format,  char *wfp, FILE * output) {
 
 	char *http_request=calloc(MAX_FILE_SIZE, 1);
 
 	char header_template[] = "POST /api/scan/direct HTTP/1.1\r\n"
-			"Host: osskb.org\r\n"
+			"Host: %s\r\n"
+            "X-session: %s\r\n"
 			"Connection: close\r\n"
 			"User-Agent: SCANOSS_scanner.c/%s\r\n"
 			"Content-Length: %lu\r\n"
@@ -173,8 +204,7 @@ bool api_post(BIO *bio,char *format,  char *wfp) {
 		"--------------------------scanoss_wfp_scan--\r\n\r\n";
     
 	/* Assemble request header */
-	sprintf(http_request, header_template, VERSION, strlen(body_template) + strlen (format) + strlen (wfp) - 4);
-
+	sprintf(http_request, header_template, host,session, VERSION, strlen(body_template) + strlen (format) + strlen (wfp) - 4);
 	/* Assemble request body */
 	sprintf(http_request + strlen(http_request), body_template,format, wfp);
 
@@ -184,28 +214,25 @@ bool api_post(BIO *bio,char *format,  char *wfp) {
     /*This symbols are used to parse the api response in buf, at this moment it could be a JSON or XML format */
     char symbol_start = '{'; 
     char symbol_stop = '}';
-
 	int size;
-	//char buf[BUFFER_SIZE];
-    char * buf;
+    bool state = true;
 	bool header = true;
 	int body_len = 0;
     char * body_start;
     char * body_end;
     int block_read = 0;
-    buf = malloc(sizeof(char)*buffer_size+1);
+    char * buf = malloc(sizeof(char)*buffer_size+1);
     
-    if (verbose)  fprintf(stderr, "Api post - buffer size: %d\n",buffer_size);
-    /* Parse response */
+     /* Parse response */
     do
     {
         memset(buf,'\0',buffer_size);
         size = BIO_read(bio, buf, buffer_size);
-#ifdef DEBUG
-        printf("\n---- api post buffer start ----\n");
-        printf(buf);
-        printf("\n---- api post buffer end ----\n");
-#endif
+
+        log_trace("\n---- api post buffer start ----\n");
+        log_trace(buf);
+        log_trace("\n---- api post buffer end ----\n");
+
         if (strstr(format,"xml")) //adjust parsing for xml implementation
         {
             symbol_start = '<';
@@ -218,74 +245,104 @@ bool api_post(BIO *bio,char *format,  char *wfp) {
             {
                 body_start = strchr(buf,symbol_start); //find the JSON start
                 body_len = strtol(body_start-5, &body_start, 16); //cast body lenght
-          //      printf("\nbody len: %d\n",body_len);
                 header = false;
                 body_end = strrchr(buf,symbol_stop);// find the last }
+
                 if (body_end-body_start >= body_len-2) //Its complete
                 {
-                   block_read += printf("%.*s\n", body_len, body_start);
+                    if (strstr(format,"plain")) //remove fist and last brackets (recursive plain format fix)
+                    {
+                        body_start += 3;
+                        body_end -= 2;
+                    }
+                   block_read += fprintf(output,"%.*s\n", body_end - body_start+1, body_start); 
+                   state = false;
+                   break;
                 }
                 else
                 {
-                    //block_read += printf(body_start);
-                    block_read += printf("%.*s", (int) strlen(body_start)-8, body_start); // 8 its some garbage from the reponse
+                    log_error("Buffer overflow, please increase the buffer using -b option");
                 }
             }
-            else if (block_read + size <= body_len-1) //the middle of the JASON
-            {
-               
-                block_read += printf("%.*s", size, buf);
-            }
-            else //Find the end.
-            {
-                body_end = strrchr(buf,symbol_stop); 
-                if (body_end)
-                    block_read += printf("%.*s\n", (int) (body_end - buf+1), buf);
-                  //  block_read += printf("%.*s\n", body_len - block_read-1, buf);
-            }
+            
         }
         
-        //printf("\nblock read: %d\n",block_read);
     } while (size > 0 && block_read <= body_len-2);
 
 	free(http_request);
     free(buf);
-	return true;
+	return state;
+}
+
+
+static bool scanner_is_dir(char *path)
+{
+    struct stat pstat;
+    if (!stat(path, &pstat)) if (S_ISDIR(pstat.st_mode)) return true;
+    return false;
+}
+
+static bool scanner_is_file(char *path)
+{
+    struct stat pstat;
+    if (!stat(path, &pstat)) if (S_ISREG(pstat.st_mode)) return true;
+    return false;
 }
 
 /* Scan a file */
-bool file_proc(char * path)
+static bool scanner_file_proc(char * path, FILE * output)
 {
-	wfp_buffer = calloc(MAX_FILE_SIZE, 1);
-	*wfp_buffer = 0;
-	wfp_capture(path);
+	bool state = true;
+    char * wfp_buffer = calloc(MAX_FILE_SIZE, 1);
+	
+    *wfp_buffer = 0;
+	
+    wfp_capture(path, wfp_buffer);
 
 	if (*wfp_buffer)
 	{
 	    BIO* bio;
 		SSL_CTX* ctx;
-
-		/* Establish SSL connection */
-		SSL_library_init();
-		ctx = SSL_CTX_new(SSLv23_client_method());
-		if (ctx == NULL) return false;
+        
+        log_debug("BIO_do_connect to: %s:%s", API_host, API_port);
+        
+        /* Establish SSL connection */
+		
+        SSL_library_init();
+		
+        ctx = SSL_CTX_new(SSLv23_client_method());
+		
+        if (ctx == NULL) return false;
     	bio = BIO_new_ssl_connect(ctx);
-		BIO_set_conn_hostname(bio, API_HOST ":" API_PORT);
+		
+        BIO_set_conn_hostname(bio,API_host);
+        BIO_set_conn_port(bio,API_port);
 
-		if(BIO_do_connect(bio) <= 0) return false;
-		api_post(bio,format, wfp_buffer);
+		if (BIO_do_connect(bio) <= 0)
+        {    
+            log_error("Connetion fails: %s:%s", API_host, API_port);
+            return false;
+        }
+              
+		api_post(bio,API_host,API_session, format, wfp_buffer, output);
 
-		/* Free SSL connection */
+		
+        /* Free SSL connection */
 		BIO_free_all(bio);
 		SSL_CTX_free(ctx);
-	}
+        
+        state = false;
+    }
+
 	free(wfp_buffer);
-    return true;
+    return state;
 }
 
 /* Scan all files from a Directory*/
-bool dir_proc(char * path)
+static bool scanner_dir_proc(char * path, FILE * output)
 {
+  
+  bool state = true; //true if were a error  
   DIR * d = opendir(path); 
   if(d==NULL) return false; 
   struct dirent * entry; // for the directory entries
@@ -296,86 +353,128 @@ bool dir_proc(char * path)
         
         sprintf(temp,"%s/%s",path,entry->d_name);
   
-        if(is_dir(temp) &&
+        if(scanner_is_dir(temp) &&
         !((strlen(entry->d_name) == 1 && entry->d_name[0] == '.') || (strlen(entry->d_name) == 2 && entry->d_name[1] == '.'))) //avoid roots
         {
-            dir_proc(temp); 
+            scanner_dir_proc(temp, output); 
         }
-        else if (is_file(temp))
+        else if (scanner_is_file(temp))
         {
-            //fprintf(stderr, "\n%s ",temp);
-            file_proc(temp);
+            if (!scanner_file_proc(temp, output))
+            {
+                report_separator(output);
+                
+                proc_files++;
+                
+                if (output != stdout)
+                    log_info("Processed files: %d",proc_files);
+            }
+            state = false;
         }
     }
     
     closedir(d); 
-    return true;
+    return state;
 }
 
 
-int main(int argc, char *argv[])
+
+/********* PUBLIC FUNTIONS DEFINITION ************/
+
+void scanner_set_buffer_size(unsigned int size)
 {
-    int param = 0;
-    
-    /* Command parser */
-    while ((param = getopt (argc, argv, "f:b:hv")) != -1)
-        switch (param)
-        {
-        case 'b': //set http response buffe size
-            buffer_size = atoi(optarg);
-            if (buffer_size > BUFFER_SIZE_MAX || buffer_size < BUFFER_SIZE_MIN )
-            {
-                buffer_size = BUFFER_SIZE_DEFAULT;
-                fprintf(stderr,"Wrong buffer size, using default: %d",buffer_size);
-            }
-            
-            break;
-        case 'v':
-            verbose = true;
-             fprintf(stderr, "verbose mode\n");
-            break;
-        case 'f':
-            if (strstr(optarg,"plain") || strstr(optarg,"spdx") || strstr(optarg,"cyclonedx"))
-                strncpy(format,optarg,sizeof(format));
-            else
-                fprintf(stderr, "%s is not a valid output format, using plain\n",optarg);
-                
-            if (verbose) fprintf(stderr, "Selected format: %s\n",format);
-            break;
-        case 'h':
-        default:
-            fprintf(stderr, "SCANOSS scanner-%s\n", VERSION);
-            fprintf(stderr, "Usage: scanner FILE or scanner DIR\n");
-            fprintf(stderr, "Option\t\t Meaning\n");
-            fprintf(stderr, "-h\t\t Show this help\n");
-            fprintf(stderr, "-f<format>\t Output format, could be: plain (default), spdx, spdx_xml or cyclonedx.\n");
-            fprintf(stderr, "-b<bytes>\t HTTP response buffer size, default: 2048\n");
-            fprintf(stderr, "-v\t\t Enable verbosity (via STDERR)\n");
-            fprintf(stderr, "\nFor more information, please visit https://scanoss.com\n");
-            exit(EXIT_FAILURE);
-           break;
-        }
-    
-       
-    char *path = argv[optind];
-    
-    if (is_file(path))
+    if (size > BUFFER_SIZE_MAX || size < BUFFER_SIZE_MIN )
     {
-        file_proc(path);
+        buffer_size = BUFFER_SIZE_DEFAULT;
+        log_info("Wrong buffer size, using default: %d",buffer_size);
     }
-    else if (is_dir(path)) 
+}
+
+void scanner_set_format(char * form)
+{
+    if (strstr(form,"plain") || strstr(form,"spdx") || strstr(form,"cyclonedx"))
+        strncpy(format,form,sizeof(format));
+    else
+       log_info("%s is not a valid output format, using plain\n",form);
+    
+}
+
+void scanner_set_host(char * host)
+{
+    memset(API_host,'\0',sizeof(API_host));
+    strncpy(API_host,host,sizeof(API_host));
+    log_debug("Host set: %s",API_host);
+}
+
+void scanner_set_port(char * port)
+{
+    memset(API_port,'\0',sizeof(API_port));
+    strncpy(API_port,port,sizeof(API_port));
+    log_debug("Port set: %s",API_port);
+}
+
+void scanner_set_session(char * session)
+{
+    memset(API_session,'\0',sizeof(API_session));
+    strncpy(API_session,session,sizeof(API_session));
+    log_debug("Session set: %s",API_session);
+}
+
+void scanner_set_log_level(int level)
+{
+    log_set_level(level);
+}
+
+bool scanner_recursive_scan(char * path, FILE * output)
+{
+    bool state = true;
+    log_debug("Scan start");
+    proc_files = 0;
+    
+    report_open(output);    
+    
+    if (scanner_is_file(path))
+    {
+        scanner_file_proc(path, output);
+        state = false;
+    }
+    else if (scanner_is_dir(path)) 
     {
         int path_len = strlen(path);
-        if (path_len > 1 && path[path_len-1] == '/') //remove extra /
+        if (path_len > 1 && path[path_len-1] == '/') //remove extra '/'
             path[path_len-1] = '\0';
         
-        dir_proc(path);
+        scanner_dir_proc(path, output);
+        state = false;
     }
     else
     {
-        fprintf(stderr,"%s is not a file\n", path);
-        return EXIT_FAILURE;
+        log_error(stderr,"\"%s\" is not a file\n", path);
     }
+    
+    report_close(output);
+    
+    if (output)
+        fclose(output);
+        
+    return state;
+}
+
+bool scanner_scan(char * host, char * port, char * session, char * format, char * path, char * file)
+{
+    FILE * output;
+    
+    if (file != NULL)
+    {
+        output = fopen(file,"w+");
+        log_debug("File open: %s",file);
+    }
+    
+    scanner_set_host(host);
+    scanner_set_port(port);
+    scanner_set_session(session);
+    scanner_set_format(format);
+    
+    return scanner_recursive_scan(path,output);
 	
-	return EXIT_SUCCESS;
 }

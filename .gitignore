@@ -1,2 +1,6 @@
 scanner
-.gitignore
+libscanner.so
+*.o
+*.d
+*.out
+*.txt
