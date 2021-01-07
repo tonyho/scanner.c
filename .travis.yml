@@ -2,10 +2,9 @@ language: c
 os: linux
 dist: bionic
 
-
 addons:
   apt:
-    - libcurl-dev
+    - libcurl4-openssl-dev
 
 compiler:
   - gcc
