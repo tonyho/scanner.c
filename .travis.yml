@@ -1,0 +1,13 @@
+language: c
+os: linux
+dist: bionic
+
+addons:
+  apt:
+    - libcurl-dev
+
+compiler:
+  - gcc
+
+script:
+  - make
