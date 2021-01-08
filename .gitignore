@@ -4,3 +4,4 @@ libscanner.so
 *.d
 *.out
 *.txt
+*.wfp

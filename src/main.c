@@ -25,7 +25,6 @@
 #include <stdlib.h>
 #include <dirent.h>
 #include <sys/stat.h>
-
 #include "scanner.h"
 
 int main(int argc, char *argv[])
@@ -33,7 +32,7 @@ int main(int argc, char *argv[])
     int param = 0;
     FILE * output = stdout;
     /* Command parser */
-    while ((param = getopt (argc, argv, "H:p:f:b:o:l:hdt")) != -1)
+    while ((param = getopt (argc, argv, "H:p:f:o:l:hdt")) != -1)
         switch (param)
         {
             case 'H':
@@ -42,12 +41,6 @@ int main(int argc, char *argv[])
             case 'p':
                 scanner_set_port(optarg);
                 break;
-            case 'b': //set http response buffe size
-            {
-                unsigned int buffer_size = atoi(optarg);
-                scanner_set_buffer_size(buffer_size);
-                break;
-            }
             case 'f':
                 scanner_set_format(optarg);
                 break;
@@ -55,7 +48,7 @@ int main(int argc, char *argv[])
                 output = fopen(optarg,"w+");
                 break;
             case 'l':
-                log_set_file(optarg);
+                scanner_set_log_file(optarg);
             case 'd':
                 scanner_set_log_level(1);
                 break;
@@ -69,7 +62,6 @@ int main(int argc, char *argv[])
                 fprintf(stderr, "Option\t\t Meaning\n");
                 fprintf(stderr, "-h\t\t Show this help\n");
                 fprintf(stderr, "-f<format>\t Output format, could be: plain (default), spdx, spdx_xml or cyclonedx.\n");
-                fprintf(stderr, "-b<bytes>\t HTTP response buffer size, default: %d bytes\n",BUFFER_SIZE_DEFAULT);
                 fprintf(stderr, "-o<file_name>\t Save the scan results in the specified file\n");
                 fprintf(stderr, "-l<file_name>\t Set logs filename\n");
                 fprintf(stderr, "-d\t\t Enable debug messages\n");

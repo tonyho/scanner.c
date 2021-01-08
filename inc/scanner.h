@@ -22,16 +22,13 @@
 
 
 
-#ifndef __SCANNNER_H
+#ifndef __SCANNER_H
 #define __SCANNER_H
 
 #include <stdbool.h>
 
-#define VERSION "1.1.3"
-#define MAX_HEADER_LEN 1048576
-#define BUFFER_SIZE_MAX 524288
-#define BUFFER_SIZE_MIN 256
-#define BUFFER_SIZE_DEFAULT 524288
+#define VERSION "1.1.4"
+#define MAX_HEADER_LEN 1024 * 1024 * 1024 * 10
 #define MAX_FILE_SIZE (1024 * 1024 * 4)
 #define MIN_FILE_SIZE 128
 
@@ -42,7 +39,7 @@ void scanner_set_buffer_size(unsigned int size);
 void scanner_set_format(char * form);
 void scanner_set_host(char * host);
 void scanner_set_port(char * port);
-
+void scanner_set_log_file(char * log);
 bool scanner_recursive_scan(char * path, FILE * output);
 bool scanner_scan(char * host, char * port, char * session, char * format, char * path, char * file);
 

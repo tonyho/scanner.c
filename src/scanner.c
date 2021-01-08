@@ -30,27 +30,33 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
-
+#include <curl/curl.h>
 
 #include "scanner.h"
 #include "blacklist_ext.h"
 #include "winnowing.h"
-#include "api_post.h"
 #include "log.h"
-//#define DEBUG /* uncomment this define to enable some debug outputs */
 
 /*SCANNER PRIVATE PROPERTIES*/
 #define API_HOST_DEFAULT "osskb.org"
 #define API_PORT_DEFAULT "443"
 #define API_SESSION_DEFAULT "\0"
 
+#define WFP_SCAN_FILE_NAME "scan.wfp"
+
+const char EXCLUDED_DIR[] = ".git, .svn, .eggs, __pycache__, node_modules, vendor,";
+const char EXCLUDED_EXTENSIONS[] = ".png, .html, .xml, .svg, .yaml, .yml, .txt, .json, .gif, .md," 
+                                 ".test, .cfg, .pdf, .properties, .jpg, .vim, .sql, .result, .template," 
+                                 ".tiff, .bmp, .DS_Store, .eot, .otf, .ttf, .woff, .rgb, .conf, .whl, .o, .ico, .wfp,";
+
 static char API_host[32] = API_HOST_DEFAULT;
 static char API_port[5] = API_PORT_DEFAULT;
 static char API_session[33] = API_SESSION_DEFAULT;
 
-static unsigned int buffer_size = BUFFER_SIZE_DEFAULT;
 static char format[10] = "plain";
 static unsigned int proc_files = 0;
+
+
 
 /* Returns a hexadecimal representation of the first "len" bytes in "bin" */
 static char *bin_to_hex(uint8_t *bin, uint32_t len)
@@ -80,59 +86,11 @@ static char *read_file(char *path, long *length)
 	fread(src, 1, *length, fp);
 	fclose(fp);
 	return src;
-}
-
-static void report_open(FILE * output)
-{
-    if (strstr(format,"plain"))
-    {
-        fprintf(output,"{");
-    }
-    else if (strstr(format,"xml"))
-    {
-        fprintf(output,"<root>");
-    } 
-    else if (strstr(format,"spdx"))
-    {
-        fprintf(output,"[");
-    }
-}
-
-static void report_close(FILE * output)
-{
-    if (output == stdout)
-        fprintf(output,"\b");
-    else
-        fseek(output,-1L,SEEK_CUR);
-        
-    if (strstr(format,"plain"))
-    {
-        fprintf(output,"}");
-    }
-     else if (strstr(format,"xml"))
-    {
-        fprintf(output,"\n</root>");
-    } 
-    else if (strstr(format,"spdx"))
-    {
-        fprintf(output,"]");
-    }
-}
-
-static void report_separator(FILE * output)
-{
-    if (!strstr(format,"xml"))
-    {
-        fprintf(output,",");
-    }
-}
-        
+}     
 
 static void wfp_capture(char *path, char *wfp_buffer)
 {
 	/* Skip unwanted extensions */
-	if (blacklisted(path)) return;
-
 	long length = 0;
 	char *src = read_file(path, &length);
 
@@ -147,9 +105,11 @@ static void wfp_capture(char *path, char *wfp_buffer)
 	uint8_t bin_md5[16]="\0";
 	MD5((uint8_t *) src, length, bin_md5);
 	char *hex_md5 = bin_to_hex(bin_md5, 16);
+    
+    char *file_name = strrchr(path,'/');
 
 	/* Save file information to buffer */
-	sprintf(wfp_buffer + strlen(wfp_buffer), "file=%s,%lu,%s\n", hex_md5, length, path);
+	sprintf(wfp_buffer + strlen(wfp_buffer), "file=%s,%lu,%s\n", hex_md5, length, file_name+1);
 	free(hex_md5);
 
 	/* If it is not binary (chr(0) found), calculate snippet wfps */
@@ -182,99 +142,6 @@ static void wfp_capture(char *path, char *wfp_buffer)
 	free(src);
 }
 
-static bool api_post(BIO *bio,char * host, char * session, char *format,  char *wfp, FILE * output) {
-
-	char *http_request=calloc(MAX_FILE_SIZE, 1);
-
-	char header_template[] = "POST /api/scan/direct HTTP/1.1\r\n"
-			"Host: %s\r\n"
-            "X-session: %s\r\n"
-			"Connection: close\r\n"
-			"User-Agent: SCANOSS_scanner.c/%s\r\n"
-			"Content-Length: %lu\r\n"
-			"Accept: */*\r\n"
-			"Content-Type: multipart/form-data; boundary=------------------------scanoss_wfp_scan\r\n\r\n";
-
-	char body_template[] = "--------------------------scanoss_wfp_scan\r\n"
-        "Content-Disposition: form-data; name=\"format\"\r\n\r\n%s\r\n"
-              "--------------------------scanoss_wfp_scan--\r\n"
-		"Content-Disposition: form-data; name=\"file\"; filename=\"scan.wfp\"\r\n"
-		"Content-Type: application/octet-stream\r\n"
-		"\r\n%s\r\n"
-		"--------------------------scanoss_wfp_scan--\r\n\r\n";
-    
-	/* Assemble request header */
-	sprintf(http_request, header_template, host,session, VERSION, strlen(body_template) + strlen (format) + strlen (wfp) - 4);
-	/* Assemble request body */
-	sprintf(http_request + strlen(http_request), body_template,format, wfp);
-
-	/* POST request */
-	BIO_write(bio, http_request, strlen(http_request));
-    
-    /*This symbols are used to parse the api response in buf, at this moment it could be a JSON or XML format */
-    char symbol_start = '{'; 
-    char symbol_stop = '}';
-	int size;
-    bool state = true;
-	bool header = true;
-	int body_len = 0;
-    char * body_start;
-    char * body_end;
-    int block_read = 0;
-    char * buf = malloc(sizeof(char)*buffer_size+1);
-    
-     /* Parse response */
-    do
-    {
-        memset(buf,'\0',buffer_size);
-        size = BIO_read(bio, buf, buffer_size);
-
-        log_trace("\n---- api post buffer start ----\n");
-        log_trace(buf);
-        log_trace("\n---- api post buffer end ----\n");
-
-        if (strstr(format,"xml")) //adjust parsing for xml implementation
-        {
-            symbol_start = '<';
-            symbol_stop = '>';
-        }
-        
-        if (size)
-        {
-            if (header && strstr(buf,"HTTP")) //find the header
-            {
-                body_start = strchr(buf,symbol_start); //find the JSON start
-                body_len = strtol(body_start-5, &body_start, 16); //cast body lenght
-                header = false;
-                body_end = strrchr(buf,symbol_stop);// find the last }
-
-                if (body_end-body_start >= body_len-2) //Its complete
-                {
-                    if (strstr(format,"plain")) //remove fist and last brackets (recursive plain format fix)
-                    {
-                        body_start += 3;
-                        body_end -= 2;
-                    }
-                   block_read += fprintf(output,"%.*s\n", body_end - body_start+1, body_start); 
-                   state = false;
-                   break;
-                }
-                else
-                {
-                    log_error("Buffer overflow, please increase the buffer using -b option");
-                }
-            }
-            
-        }
-        
-    } while (size > 0 && block_read <= body_len-2);
-
-	free(http_request);
-    free(buf);
-	return state;
-}
-
-
 static bool scanner_is_dir(char *path)
 {
     struct stat pstat;
@@ -293,56 +160,145 @@ static bool scanner_is_file(char *path)
 static bool scanner_file_proc(char * path, FILE * output)
 {
 	bool state = true;
-    char * wfp_buffer = calloc(MAX_FILE_SIZE, 1);
+    char * wfp_buffer; 
+	char * ext = strrchr(path, '.');
+    if (!ext)
+        return state;
+    
+    char f_extension[strlen(ext) + 2];
+    
+    /*File extension filter*/
+    sprintf(f_extension,"%s,",ext);
+    
+    if (strstr(EXCLUDED_EXTENSIONS,f_extension))
+    {
+        log_debug("Excluded extension: %s", ext);
+        return true; //avoid filtered extensions
+    }
+    
+    wfp_buffer = calloc(MAX_FILE_SIZE, 1);
 	
     *wfp_buffer = 0;
-	
+        
     wfp_capture(path, wfp_buffer);
-
-	if (*wfp_buffer)
-	{
-	    BIO* bio;
-		SSL_CTX* ctx;
-        
-        log_debug("BIO_do_connect to: %s:%s", API_host, API_port);
-        
-        /* Establish SSL connection */
-		
-        SSL_library_init();
-		
-        ctx = SSL_CTX_new(SSLv23_client_method());
-		
-        if (ctx == NULL) return false;
-    	bio = BIO_new_ssl_connect(ctx);
-		
-        BIO_set_conn_hostname(bio,API_host);
-        BIO_set_conn_port(bio,API_port);
-
-		if (BIO_do_connect(bio) <= 0)
-        {    
-            log_error("Connetion fails: %s:%s", API_host, API_port);
-            return false;
-        }
-              
-		api_post(bio,API_host,API_session, format, wfp_buffer, output);
-
-		
-        /* Free SSL connection */
-		BIO_free_all(bio);
-		SSL_CTX_free(ctx);
-        
+    if (*wfp_buffer)
+    {
+        FILE * wfp_f = fopen(WFP_SCAN_FILE_NAME,"a+");
+        fprintf(wfp_f,"%s",wfp_buffer);
+        fclose(wfp_f);
         state = false;
+    }
+    else
+    {
+        log_debug("No wfp: %s",path);
     }
 
 	free(wfp_buffer);
     return state;
 }
 
+int api_curl_post(char * host, char * port, char * session,char * version, char *format, char *wfp, FILE * output)
+{
+    
+   char body_template[] = "--------------------------scanoss_wfp_scan\r\n"
+        "Content-Disposition: form-data; name=\"format\"\r\n\r\n%s\r\n"
+              "--------------------------scanoss_wfp_scan--\r\n"
+		"Content-Disposition: form-data; name=\"file\"; filename=\"scan.wfp\"\r\n"
+		"Content-Type: application/octet-stream\r\n"
+		"\r\n%s\r\n"
+		"--------------------------scanoss_wfp_scan--\r\n\r\n";
+        
+    char user_version[64]; 
+    char user_session[64];
+    long m_port = strtol(port,NULL,10);
+    
+    sprintf(user_session,"X-session: %s",session);
+    sprintf(user_version,"User-Agent: SCANOSS_scanner.c/%s",version);
+    
+    log_debug("Version:%s", user_version);
+    
+    char *http_request=calloc(strlen(wfp)+strlen(body_template)+100, 1);
+    sprintf(http_request,body_template,format,wfp);
+    log_trace(http_request);
+    
+    free(wfp);
+    
+    CURL *curl;
+    CURLcode res;
+      
+  /* In windows, this will init the winsock stuff */ 
+    res = curl_global_init(CURL_GLOBAL_DEFAULT);
+  /* Check for errors */ 
+    if(res != CURLE_OK) 
+    {
+        fprintf(stderr, "curl_global_init() failed: %s\n",
+        curl_easy_strerror(res));
+        return 1;
+    }
+ 
+  /* get a curl handle */ 
+    curl = curl_easy_init();
+    if(curl) 
+    {
+	/* First set the URL that is about to receive our POST. */ 
+        curl_easy_setopt(curl, CURLOPT_URL, "osskb.org/api/scan/direct");
+        curl_easy_setopt(curl, CURLOPT_PORT, m_port);
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, http_request);
+        
+        if (log_level_is_enabled(LOG_TRACE))
+            curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
+            
+        curl_easy_setopt(curl, CURLOPT_DEFAULT_PROTOCOL, "https");
+            
+        struct curl_slist *chunk = NULL;
+        chunk = curl_slist_append(chunk, "Connection: close");
+        chunk = curl_slist_append(chunk, user_version);
+        chunk = curl_slist_append(chunk, user_session);
+        chunk = curl_slist_append(chunk, "Content-Type: multipart/form-data; boundary=------------------------scanoss_wfp_scan");
+        chunk = curl_slist_append(chunk, "Expect:");      
+        chunk = curl_slist_append(chunk, "Accept: */*");
+        
+        res = curl_easy_setopt(curl, CURLOPT_HTTPHEADER, chunk);
+ 
+        curl_easy_setopt( curl, CURLOPT_WRITEDATA, output) ;
+ 
+        /* Perform the request, res will get the return code */ 
+        res = curl_easy_perform(curl);
+        /* Check for errors */ 
+        if(res != CURLE_OK)
+            fprintf(stderr, "curl_easy_perform() failed: %s\n",curl_easy_strerror(res));
+ 
+        /* always cleanup */ 
+        curl_easy_cleanup(curl);
+  }
+  curl_global_cleanup();
+  return 0;
+}
+
+
+static bool api_request(FILE * output)
+{
+    
+    long buffer_size = 0;
+    char *wfp_buffer = read_file(WFP_SCAN_FILE_NAME,&buffer_size);
+    wfp_buffer[buffer_size] = 0;
+    bool state = true;
+    if (*wfp_buffer)
+    {
+        api_curl_post(API_host,API_port,API_session,VERSION, format, wfp_buffer, output);
+        state = false;
+    }
+
+    return state;
+    
+}
+
 /* Scan all files from a Directory*/
 static bool scanner_dir_proc(char * path, FILE * output)
 {
   
-  bool state = true; //true if were a error  
+  bool state = true; //true if were a error
+  
   DIR * d = opendir(path); 
   if(d==NULL) return false; 
   struct dirent * entry; // for the directory entries
@@ -352,19 +308,31 @@ static bool scanner_dir_proc(char * path, FILE * output)
         char temp[strlen(path) + strlen(entry->d_name)+1];
         
         sprintf(temp,"%s/%s",path,entry->d_name);
-  
-        if(scanner_is_dir(temp) &&
-        !((strlen(entry->d_name) == 1 && entry->d_name[0] == '.') || (strlen(entry->d_name) == 2 && entry->d_name[1] == '.'))) //avoid roots
+        
+        if(scanner_is_dir(temp)) 
         {
-            scanner_dir_proc(temp, output); 
+            
+            if (!strcmp(entry->d_name,".") || !strcmp(entry->d_name,"..")) continue;
+
+            /*Directory filter */
+            char f_dir[strlen(entry->d_name) + 2];
+            sprintf(f_dir,"%s,",entry->d_name);
+            
+            if (strstr(EXCLUDED_DIR,f_dir))
+            {
+                log_debug("Excluded Directory: %s",entry->d_name);
+                continue;
+            }
+            
+            scanner_dir_proc(temp, output); //If its a valid directory, then process it
+            
         }
         else if (scanner_is_file(temp))
         {
             if (!scanner_file_proc(temp, output))
             {
-                report_separator(output);
-                
                 proc_files++;
+                log_trace("Scan: %s",temp);
                 
                 if (output != stdout)
                     log_info("Processed files: %d",proc_files);
@@ -380,15 +348,6 @@ static bool scanner_dir_proc(char * path, FILE * output)
 
 
 /********* PUBLIC FUNTIONS DEFINITION ************/
-
-void scanner_set_buffer_size(unsigned int size)
-{
-    if (size > BUFFER_SIZE_MAX || size < BUFFER_SIZE_MIN )
-    {
-        buffer_size = BUFFER_SIZE_DEFAULT;
-        log_info("Wrong buffer size, using default: %d",buffer_size);
-    }
-}
 
 void scanner_set_format(char * form)
 {
@@ -425,14 +384,21 @@ void scanner_set_log_level(int level)
     log_set_level(level);
 }
 
+void scanner_set_log_file(char * log)
+{
+    log_set_file(log);
+}
+
 bool scanner_recursive_scan(char * path, FILE * output)
 {
     bool state = true;
     log_debug("Scan start");
     proc_files = 0;
     
-    report_open(output);    
-    
+    /*create blank wfp file*/
+    FILE * wfp_f = fopen(WFP_SCAN_FILE_NAME,"w+");
+    fclose(wfp_f);
+               
     if (scanner_is_file(path))
     {
         scanner_file_proc(path, output);
@@ -449,10 +415,11 @@ bool scanner_recursive_scan(char * path, FILE * output)
     }
     else
     {
-        log_error(stderr,"\"%s\" is not a file\n", path);
-    }
+        log_error("\"%s\" is not a file\n", path);
+    }   
     
-    report_close(output);
+    api_request(output);
+    
     
     if (output)
         fclose(output);

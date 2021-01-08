@@ -24,6 +24,9 @@ BIN_NAME=scanner
 
 $(TARGET_NOINTEL): CCFLAGS += -DCRC32_SOFTWARE_MODE
 
+ifeq ("$(wildcard /usr/lib/x86_64-linux-gnu/libcurl.so)","")
+$(warning  (WARNING Please install libcurl before build the project. Follow the instructions in README))
+endif
 
 all: clean scanner deb
 
