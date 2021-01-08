@@ -1,6 +1,6 @@
 CC=gcc
 # Enable all compiler warnings. 
-CCFLAGS= -fPIC -g -Wall -std=gnu99 -I./inc -I./external/inc
+CCFLAGS= -fPIC -g -Wall -Werror -std=gnu99 -I./inc -I./external/inc
 
 # Linker flags
 LDFLAGS=-lpthread -lcrypto -lssl -lcurl
