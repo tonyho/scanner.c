@@ -86,7 +86,7 @@ static char *read_file(char *path, long *length)
     return src;
 }
 
-static void wfp_capture(char *path, char *wfp_buffer)
+static void wfp_capture(char *root, char *path, char *wfp_buffer)
 {
     /* Skip unwanted extensions */
     long length = 0;
@@ -104,7 +104,7 @@ static void wfp_capture(char *path, char *wfp_buffer)
     MD5((uint8_t *)src, length, bin_md5);
     char *hex_md5 = bin_to_hex(bin_md5, 16);
 
-    char *file_name = strrchr(path, '/');
+    char *file_name = path + strlen(root);
 
     /* Save file information to buffer */
     sprintf(wfp_buffer + strlen(wfp_buffer), "file=%s,%lu,%s\n", hex_md5, length, file_name + 1);
@@ -161,7 +161,7 @@ static bool scanner_is_file(char *path)
 }
 
 /* Scan a file */
-static bool scanner_file_proc(char *path, FILE *output)
+static bool scanner_file_proc(char *root, char *path, FILE *output)
 {
     bool state = true;
     char *wfp_buffer;
@@ -184,7 +184,7 @@ static bool scanner_file_proc(char *path, FILE *output)
 
     *wfp_buffer = 0;
 
-    wfp_capture(path, wfp_buffer);
+    wfp_capture(root, path, wfp_buffer);
     if (*wfp_buffer)
     {
         FILE *wfp_f = fopen(WFP_SCAN_FILE_NAME, "a+");
@@ -296,7 +296,7 @@ static bool api_request(FILE *output)
 }
 
 /* Scan all files from a Directory*/
-static bool scanner_dir_proc(char *path, FILE *output)
+static bool scanner_dir_proc(char *root, char *path, FILE *output)
 {
 
     bool state = true; //true if were a error
@@ -321,24 +321,19 @@ static bool scanner_dir_proc(char *path, FILE *output)
             /*Directory filter */
             char f_dir[strlen(entry->d_name) + 2];
             sprintf(f_dir, "%s,", entry->d_name);
-
             if (strstr(EXCLUDED_DIR, f_dir))
             {
                 log_debug("Excluded Directory: %s", entry->d_name);
                 continue;
             }
-
-            scanner_dir_proc(temp, output); //If its a valid directory, then process it
+            scanner_dir_proc(root, temp, output); //If its a valid directory, then process it
         }
         else if (scanner_is_file(temp))
         {
-            if (!scanner_file_proc(temp, output))
+            if (!scanner_file_proc(root, temp, output))
             {
                 proc_files++;
                 log_trace("Scan: %s", temp);
-
-                if (output != stdout)
-                    log_info("Processed files: %d", proc_files);
             }
             state = false;
         }
@@ -401,7 +396,7 @@ bool scanner_recursive_scan(char *path, FILE *output)
 
     if (scanner_is_file(path))
     {
-        scanner_file_proc(path, output);
+        scanner_file_proc("", path, output);
         state = false;
     }
     else if (scanner_is_dir(path))
@@ -410,7 +405,7 @@ bool scanner_recursive_scan(char *path, FILE *output)
         if (path_len > 1 && path[path_len - 1] == '/') //remove extra '/'
             path[path_len - 1] = '\0';
 
-        scanner_dir_proc(path, output);
+        scanner_dir_proc(path, path, output);
         state = false;
     }
     else
