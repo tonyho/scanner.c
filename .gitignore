@@ -1,7 +1,8 @@
 scanner
-libscanner.so
+*.so
 *.o
 *.d
 *.out
 *.txt
 *.wfp
+dist/

@@ -12,7 +12,7 @@ Libcurl must be present in your system.
 
 You can install it with:
 ```
-sudo apt-get install  libcurl-dev
+sudo apt-get install libcurl4-openssl-dev
 ```
 
 # Usage

@@ -20,13 +20,9 @@ TARGET_NOINTEL=no_intel
 
 LIB_NAME=libscanner.so
 BIN_NAME=scanner
-
+EXPORTED_HEADERS=$(wildcard inc/*.h)
 
 $(TARGET_NOINTEL): CCFLAGS += -DCRC32_SOFTWARE_MODE
-
-ifeq ("$(wildcard /usr/lib/x86_64-linux-gnu/libcurl.so)","")
-$(warning  (WARNING Please install libcurl before build the project. Follow the instructions in README))
-endif
 
 all: clean scanner deb
 
@@ -49,7 +45,7 @@ install:$(BIN_NAME)
 	cp $(BIN_NAME) /usr/bin
 install_lib:$(LIB_NAME)
 	cp $(LIB_NAME) /usr/lib
-	mkdir -p /usr/include/scanner && cp inc/scanner.h /usr/include/scanner
+	mkdir -p /usr/include/scanner && cp inc/scanner.h /usr/include/scanoss
 clean_build:
 	rm -f src/*.o src/**/*.o external/src/*.o external/src/**/*.o    
 
@@ -58,10 +54,17 @@ clean: clean_build
 
 distclean: clean
 
-deb: $(TARGET_SCANNER)
-	sed -i "s/Version:.*/Version: $(VERSION)/g" pkg/DEBIAN/control
-	cp -vax scanner pkg/usr/bin
-	dpkg-deb --build pkg
-	mv pkg.deb scanoss-scanner-$(VERSION)_amd64.deb
+deb: $(TARGET_SCANNER) $(TARGET_LIB)
+	@rm -rf dist/debian
+	@mkdir -p dist/debian/DEBIAN
+	@mkdir -p dist/debian/usr/include/scanoss
+	@mkdir -p dist/debian/usr/lib
+	@mkdir -p dist/debian/usr/bin
+	cat packages/debian/control | sed "s/%VERSION%/$(VERSION)/" > dist/debian/DEBIAN/control
+	@cp -vax $(TARGET_SCANNER) dist/debian/usr/bin
+	@cp -vax $(EXPORTED_HEADERS) dist/debian/usr/include/scanoss
+	@cp -vax $(LIB_NAME) dist/debian/usr/lib
+	dpkg-deb --build dist/debian
+	mv dist/debian.deb dist/scanoss-scanner-$(VERSION)-amd64.deb
 	
 

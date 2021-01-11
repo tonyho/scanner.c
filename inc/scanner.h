@@ -27,7 +27,7 @@
 
 #include <stdbool.h>
 
-#define VERSION "1.1.4"
+#define VERSION "1.1.5"
 #define MAX_HEADER_LEN 1024 * 1024 * 1024 * 10
 #define MAX_FILE_SIZE (1024 * 1024 * 4)
 #define MIN_FILE_SIZE 128

@@ -1,6 +1,6 @@
 Package: scanoss-scanner
-Version: 1.1.4
-Depends: libssl1.1
+Version: %VERSION%
+Depends: libcurl4-openssl-dev
 Section: custom
 Priority: optional
 Architecture: all
