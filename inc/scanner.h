@@ -27,7 +27,7 @@
 
 #include <stdbool.h>
 
-#define VERSION "1.1.6"
+#define VERSION "1.1.7"
 #define MAX_HEADER_LEN 1024 * 1024 * 1024 * 10
 #define MAX_FILE_SIZE (1024 * 1024 * 4)
 #define MIN_FILE_SIZE 128
@@ -39,7 +39,8 @@ void scanner_set_buffer_size(unsigned int size);
 void scanner_set_format(char * form);
 void scanner_set_host(char * host);
 void scanner_set_port(char * port);
-void scanner_set_log_file(char * log);
+void scanner_set_session(char *session);
+void scanner_set_log_file(char *log);
 bool scanner_recursive_scan(char * path, FILE * output);
 bool scanner_scan(char * host, char * port, char * session, char * format, char * path, char * file);
 
